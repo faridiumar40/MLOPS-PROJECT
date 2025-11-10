@@ -1,34 +1,59 @@
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: mlops-app
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: mlops-app
-  template:
-    metadata:
-      labels:
-        app: mlops-app
-    spec:
-      containers:
-      - name: mlops-app
-        image: us-central1-docker.pkg.dev/mlops-new-447207/my-repo/mlops-app:latest
-        ports:
-        - containerPort: 5000
+name: CI/CD to GKE (keyless)
 
----
+on:
+  push:
+    branches: [ main ]
 
-apiVersion: v1
-kind: Service
-metadata:
-  name: mlops-service
-spec:
-  selector:
-    app: mlops-app
-  ports:
-    - protocol: TCP
-      port: 80
-      targetPort: 5000
-  type: LoadBalancer
+env:
+  PROJECT_ID: radiant-century-465309-n4
+  GKE_CLUSTER: my-cluster
+  GKE_LOCATION: us-central1            # region or zone
+  DEPLOYMENT_NAME: mlops-app           # k8s Deployment name
+  CONTAINER_NAME: mlops-app            # container name inside Deployment
+  IMAGE: us-docker.pkg.dev/radiant-century-465309-n4/my-repo/mlops-app
+  USE_GKE_GCLOUD_AUTH_PLUGIN: "True"   # required for modern kubectl auth
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write   # OIDC
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Keyless auth with Workload Identity Federation (no JSON keys)
+      - name: Auth to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/${{ env.PROJECT_ID_NUMBER }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: gha-deployer@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
+          # TIP: Set PROJECT_ID_NUMBER as a secret or hardcode it once you know it.
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry (us)
+        run: gcloud auth configure-docker us-docker.pkg.dev --quiet
+
+      - name: Build & Push image
+        run: |
+          docker build -t "${IMAGE}:${GITHUB_SHA}" .
+          docker push "${IMAGE}:${GITHUB_SHA}"
+
+      # This action installs kubectl + gke-gcloud-auth-plugin and writes kubeconfig
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: ${{ env.GKE_LOCATION }}
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Apply manifests & update image
+        run: |
+          kubectl apply -f kubernetes-deployment.yaml
+          kubectl set image deployment/${DEPLOYMENT_NAME} \
+            ${CONTAINER_NAME}=${IMAGE}:${GITHUB_SHA}
