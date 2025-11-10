@@ -2,50 +2,52 @@ name: CI/CD Deployment to GKE
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  GKE_CLUSTER: "my-cluster"
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}                 # set to radiant-century-465309-n4
+  GKE_CLUSTER: "my-cluster"                                 # <-- your cluster name
   GKE_REGION: "us-central1"
-  DEPLOYMENT_NAME: "mlops-app"
-  REPOSITORY: "us-docker.pkg.dev/radiant-century-465309-n4/my-repo"
-  IMAGE: "us-docker.pkg.dev/radiant-century-465309-n4/my-repo/mlops-app"
+  DEPLOYMENT_NAME: "mlops-app"                              # <-- k8s Deployment name
+  IMAGE: "us-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/my-repo/mlops-app"
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v2
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Install Google Cloud SDK
-        run: |
-          curl https://sdk.cloud.google.com | bash > /dev/null
-          source $HOME/google-cloud-sdk/path.bash.inc
-
-      - name: Authenticate with Google Cloud
-        uses: google-github-actions/auth@v1
+      # Auth with your service account key stored in GitHub secret GCP_SA_KEY
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Configure GCloud
-        run: |
-          gcloud config set project $PROJECT_ID
-          gcloud auth configure-docker us-central1-docker.pkg.dev
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
 
-      - name: Build and Push Docker Image
+      - name: Configure gcloud
         run: |
-          docker build -t $IMAGE:$GITHUB_SHA .
-          docker push $IMAGE:$GITHUB_SHA
+          gcloud config set project "$PROJECT_ID"
+          # IMPORTANT: host must match your repo location (= us)
+          gcloud auth configure-docker us-docker.pkg.dev --quiet
 
-      - name: Configure GKE
+      - name: Build & Push Docker image
         run: |
-          gcloud container clusters get-credentials $GKE_CLUSTER --region $GKE_REGION --project $PROJECT_ID
+          echo "Pushing to: $IMAGE:$GITHUB_SHA"
+          docker build -t "$IMAGE:$GITHUB_SHA" .
+          docker push "$IMAGE:$GITHUB_SHA"
 
-      - name: Deploy to Kubernetes
+      - name: Get GKE credentials
+        run: |
+          gcloud container clusters get-credentials "$GKE_CLUSTER" \
+            --region "$GKE_REGION" --project "$PROJECT_ID"
+
+      - name: Apply manifests & update image
         run: |
           kubectl apply -f kubernetes-deployment.yaml
-          kubectl set image deployment/$DEPLOYMENT_NAME $DEPLOYMENT_NAME=$IMAGE:$GITHUB_SHA
+          # If your container name inside the Deployment is different, replace mlops-app on the left
+          kubectl set image deployment/"$DEPLOYMENT_NAME" \
+            mlops-app="$IMAGE:$GITHUB_SHA"
