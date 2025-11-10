@@ -2,8 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mlops-app
-  labels:
-    app: mlops-app
 spec:
   replicas: 2
   selector:
@@ -15,31 +13,22 @@ spec:
         app: mlops-app
     spec:
       containers:
-        - name: mlops-app
-          # Placeholder; pipeline updates this tag with kubectl set image
-          image: us-docker.pkg.dev/radiant-century-465309-n4/my-repo/mlops-app:initial
-          ports:
-            - containerPort: 5000
-          imagePullPolicy: IfNotPresent
-          readinessProbe:
-            httpGet: { path: /healthz, port: 5000 }
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          livenessProbe:
-            httpGet: { path: /healthz, port: 5000 }
-            initialDelaySeconds: 15
-            periodSeconds: 20
+      - name: mlops-app
+        image: us-central1-docker.pkg.dev/mlops-new-447207/my-repo/mlops-app:latest
+        ports:
+        - containerPort: 5000
+
 ---
+
 apiVersion: v1
 kind: Service
 metadata:
   name: mlops-service
 spec:
-  type: LoadBalancer
   selector:
     app: mlops-app
   ports:
     - protocol: TCP
       port: 80
       targetPort: 5000
-
+  type: LoadBalancer
